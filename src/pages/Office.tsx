@@ -81,7 +81,8 @@ export function OfficeDetail({ station, onClose }: { station: OfficeStation; onC
   const [tab, setTab] = useState<DetailTab>('Overview')
   useEffect(() => { closeRef.current?.focus() }, [])
   const badge = officeStateBadge(station.state)
-  const profile = station.kind === 'subagent' ? undefined : station.id
+  // Only a Hermes profile has a folder, memory and usage; OpenCode, subagents and Cursor sessions do not.
+  const profile = station.kind && station.kind !== 'opencode' ? undefined : station.id
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.key === 'Escape') { event.stopPropagation(); onClose(); return }
     if (event.key !== 'Tab') return
@@ -104,7 +105,7 @@ export function OfficeDetail({ station, onClose }: { station: OfficeStation; onC
         {tab === 'Overview' && <>{station.privacy === 'locked' && <p className="file-notice">🔒 {station.name} is locked: its task, activity, memory and files are private.{profile ? ' Open the Folder or Memory tab to enter the PIN.' : ''}</p>}
           {station.privacy === 'unlocked' && <RelockBar agent={station.id} minutes={15}/>}
           {station.activity && <p className="detail-activity">{station.activity}</p>}
-          <dl className="office-detail-grid"><div><dt>Agent type</dt><dd>{station.role}</dd></div>{station.subagent && <><div><dt>Delegation</dt><dd>{station.subagent.delegation}</dd></div><div><dt>Child</dt><dd>{station.subagent.index + 1} of {station.subagent.total}</dd></div><div><dt>Subagent model</dt><dd>{station.subagent.model ?? 'inherited from its parent'}</dd></div><div><dt>Doing</dt><dd>{station.subagent.label}</dd></div></>}{station.kind !== 'subagent' && station.role !== 'OpenCode' && <AgentTokens agent={station.id}/>}<div><dt>Current room</dt><dd>{station.room} / {station.roomPosition}</dd></div><div><dt>Current task</dt><dd>{station.currentTask}</dd></div><div><dt>Recent activity</dt><dd>{station.recentActivity}</dd></div><div><dt>Source / provenance</dt><dd>{station.provenance}</dd></div><div><dt>Freshness</dt><dd>{station.freshness}</dd></div></dl></>}
+          <dl className="office-detail-grid"><div><dt>Agent type</dt><dd>{station.role}</dd></div>{station.subagent && <><div><dt>Delegation</dt><dd>{station.subagent.delegation}</dd></div><div><dt>Child</dt><dd>{station.subagent.index + 1} of {station.subagent.total}</dd></div><div><dt>Subagent model</dt><dd>{station.subagent.model ?? 'inherited from its parent'}</dd></div><div><dt>Doing</dt><dd>{station.subagent.label}</dd></div></>}{station.cursor && <><div><dt>Cursor project</dt><dd>{station.cursor.directory}</dd></div><div><dt>Cursor model</dt><dd>{station.cursor.model ?? 'Not recorded locally'}</dd></div><div><dt>Cursor evidence</dt><dd>{station.cursor.evidence.map((item) => item === 'edits' ? 'AI file edits' : item === 'store' ? 'conversation store write' : 'workbench state (context only)').join(' + ')}</dd></div><div><dt>Work seen</dt><dd>{station.cursor.filesTouched} file{station.cursor.filesTouched === 1 ? '' : 's'} edited · {station.cursor.conversations} conversation{station.cursor.conversations === 1 ? '' : 's'}</dd></div><div><dt>Defined in project</dt><dd>{station.cursor.agents} Cursor agent{station.cursor.agents === 1 ? '' : 's'} — Cursor does not record which one ran</dd></div></>}{profile && station.role !== 'OpenCode' && <AgentTokens agent={station.id}/>}<div><dt>Current room</dt><dd>{station.room} / {station.roomPosition}</dd></div><div><dt>Current task</dt><dd>{station.currentTask}</dd></div><div><dt>Recent activity</dt><dd>{station.recentActivity}</dd></div><div><dt>Source / provenance</dt><dd>{station.provenance}</dd></div><div><dt>Freshness</dt><dd>{station.freshness}</dd></div></dl></>}
         {tab === 'Folder' && profile && <AgentFolder profile={profile}/>}
         {tab === 'Memory' && profile && <AgentMemoryView profile={profile}/>}
       </div>
@@ -137,7 +138,8 @@ function hudItems(office: OfficeSnapshot | undefined, dashboard: DashboardSnapsh
   const summary = office?.summary ?? dashboard?.office
   const items: HudItem[] = []
   if (summary) {
-    items.push({ label: 'Crew active', value: `${Math.max(0, summary.active - (summary.subagents ?? 0))}/${summary.declared}`, title: `${summary.idle} idle · ${summary.offline} offline · ${summary.unknown} unknown` })
+    items.push({ label: 'Crew active', value: `${Math.max(0, summary.active - (summary.subagents ?? 0) - (summary.cursor ?? 0))}/${summary.declared}`, title: `${summary.idle} idle · ${summary.offline} offline · ${summary.unknown} unknown` })
+    if (summary.cursor) items.push({ label: 'Cursor', value: String(summary.cursor), title: 'Projects Cursor is working in right now, discovered from Cursor\'s own local records; each one sits at a desk while it works', page: 'Agents' })
     if (summary.subagents) items.push({ label: 'Subagents', value: String(summary.subagents), title: 'Children of a running delegation, discovered from their live transcripts; each one sits at a desk while it works', page: 'Agents' })
     items.push({ label: 'Gateways', value: `${summary.gatewaysReachable}/${summary.gatewaysDeclared}`, title: 'Profiles whose Hermes gateway is running (CLI-only agents need none)', page: 'Agents' })
   }
@@ -224,7 +226,7 @@ export function Office({ dashboard, dashboardPending = false, onNavigate }: { da
       <div className="office-panel-body" role="tabpanel" aria-label={panel}>
         {panel === 'Crew' && <>
           <SourceStatus source={office ? { availability: 'available', data: null } : undefined} fetchedAt={office?.fetchedAt} request={snapshot}/>
-          <section className="office-summary"><p className="eyebrow">CREW SNAPSHOT</p><strong>{office?.summary.active ?? 0} active work</strong>{office?.summary.subagents ? <span>{office.summary.subagents} subagent{office.summary.subagents === 1 ? '' : 's'} working now</span> : null}<span>{office?.summary.idle ?? 0} Idle (managed)</span><span>{office?.summary.unknown ?? 0} Unknown / {office?.summary.offline ?? 0} Offline</span><hr/><span>Gateways running: {office ? `${office.summary.gatewaysReachable} of ${office.summary.gatewaysDeclared}` : 'Not Available'}</span></section>
+          <section className="office-summary"><p className="eyebrow">CREW SNAPSHOT</p><strong>{office?.summary.active ?? 0} active work</strong>{office?.summary.subagents ? <span>{office.summary.subagents} subagent{office.summary.subagents === 1 ? '' : 's'} working now</span> : null}{office?.summary.cursor ? <span>{office.summary.cursor} Cursor session{office.summary.cursor === 1 ? '' : 's'} working now</span> : null}<span>{office?.summary.idle ?? 0} Idle (managed)</span><span>{office?.summary.unknown ?? 0} Unknown / {office?.summary.offline ?? 0} Offline</span><hr/><span>Gateways running: {office ? `${office.summary.gatewaysReachable} of ${office.summary.gatewaysDeclared}` : 'Not Available'}</span></section>
           <div className="crew-list">{office?.stations.map(stationButton)}</div>
           <small className="muted">Stations show only attributable work. Select one for its evidence and freshness.</small>
         </>}

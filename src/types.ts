@@ -42,17 +42,46 @@ export interface SubagentRun {
   lastOutputAt?: string
 }
 export interface SubagentSnapshot { runs: Source<SubagentRun[]>; live: number; fetchedAt: string }
+/** One Cursor agent definition: a markdown file the user wrote, with a name in its frontmatter. */
+export interface CursorAgentDefinition {
+  id: string
+  name: string
+  /** The project folder it belongs to, or `global` for `~/.cursor/agents`. */
+  project: string
+  directory: string
+  path: string
+  description?: string
+  modifiedAt?: string
+}
+/** One project Cursor is working in, from Cursor's own local records. */
+export interface CursorSession {
+  id: string
+  project: string
+  directory: string
+  model?: string
+  conversations: number
+  filesTouched: number
+  lastActivityAt: string
+  live: boolean
+  /** Which local evidence the session rests on; the workbench write alone is never proof of work. */
+  evidence: ('edits' | 'store' | 'workbench')[]
+  /** How many Cursor agent definitions this project holds. */
+  agents: number
+}
+export interface CursorSnapshot { agents: Source<CursorAgentDefinition[]>; sessions: Source<CursorSession[]>; live: number; fetchedAt: string }
 /** What a subagent station carries about its own child. */
 export interface SubagentFacts { delegation: string; index: number; total: number; label: string; goal: string; model?: string; status: SubagentRun['status']; startedAt?: string; lastOutputAt?: string }
 export interface OfficeStation {
   /** Agent id: the Hermes profile name, `opencode`, or `sub:<delegation>#<index>` for a delegation child. */
   id: string
-  /** Set on agents that are not plain Hermes profiles: OpenCode and delegation subagents. */
-  kind?: 'opencode' | 'subagent'
+  /** Set on agents that are not plain Hermes profiles: OpenCode, delegation children, Cursor sessions. */
+  kind?: 'opencode' | 'subagent' | 'cursor'
   /** Subagent stations only: the Hermes profile whose delegation this child belongs to. */
   parent?: string
   /** Subagent stations only: the child's own facts (there is no profile folder or memory behind it). */
   subagent?: SubagentFacts
+  /** Cursor stations only: the project session Cursor's own local records show it working in. */
+  cursor?: CursorSession
   /** Profile lock: `locked` withholds its private data in this browser, `unlocked` is opened with the PIN. */
   privacy?: 'locked' | 'unlocked'
   name: string
@@ -67,7 +96,7 @@ export interface OfficeStation {
   provenance: string
   freshness: string
 }
-export interface OfficeSummary { declared: number; active: number; idle: number; offline: number; unknown: number; /** Delegation children working right now; present only while there are any. */ subagents?: number; gatewaysReachable: number; gatewaysDeclared: number }
+export interface OfficeSummary { declared: number; active: number; idle: number; offline: number; unknown: number; /** Delegation children working right now; present only while there are any. */ subagents?: number; /** Cursor sessions working right now; present only while there are any. */ cursor?: number; gatewaysReachable: number; gatewaysDeclared: number }
 export interface OfficeSnapshot { stations: OfficeStation[]; summary: OfficeSummary; fetchedAt: string }
 export interface UsageInsights {
   days: number

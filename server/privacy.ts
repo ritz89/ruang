@@ -1,5 +1,6 @@
 import type { MemorySnapshot } from './memory.js'
 import type { SubagentSnapshot } from './delegation.js'
+import type { CursorSnapshot } from './cursor.js'
 import type { ActivitySnapshot, CalendarSnapshot, DashboardSnapshot, LogsSnapshot, OfficeSnapshot, TaskBoardSnapshot, UsageSnapshot } from './mission-control.js'
 import { isHidden, type Privacy } from './profile-lock.js'
 
@@ -20,7 +21,8 @@ export function redactOffice(office: OfficeSnapshot, privacy: Privacy): OfficeSn
     ...office,
     stations: office.stations.map((station) => {
       // A subagent station belongs to its parent profile: locking the parent hides the child's work too.
-      const hidden = isHidden(privacy, station.id) || (station.kind === 'subagent' && isHidden(privacy, station.parent))
+      // A Cursor session belongs to no Hermes profile, so only `privacy.all` withholds it.
+      const hidden = isHidden(privacy, station.id) || (station.kind === 'subagent' && isHidden(privacy, station.parent)) || (station.kind === 'cursor' && privacy.all)
       if (!hidden) return privacy.locked.has(station.id) ? { ...station, privacy: 'unlocked' as const } : station
       const busy = station.state !== 'Idle' && station.state !== 'Offline' && station.state !== 'Unknown'
       // Provenance names the kind of live activity (chat, cron, tools…), so it is withheld too.
@@ -64,6 +66,20 @@ export function redactSubagents(subagents: SubagentSnapshot, privacy: Privacy): 
   return {
     ...subagents,
     runs: { ...subagents.runs, data: subagents.runs.data.map((run) => isHidden(privacy, run.profile) ? { ...run, label: '🔒 Private subagent', goal: '', model: undefined } : run) },
+  }
+}
+
+/**
+ * Cursor data belongs to no Hermes profile, so no profile lock can cover it. `privacy.all` — the
+ * switch that hides every private agent — is therefore what withholds it, and it takes away the
+ * parts that would name the user's disk and model while leaving the roster readable.
+ */
+export function redactCursor(cursor: CursorSnapshot, privacy: Privacy): CursorSnapshot {
+  if (!privacy.all) return cursor
+  return {
+    ...cursor,
+    agents: { ...cursor.agents, data: cursor.agents.data.map((agent) => ({ ...agent, path: '🔒 Private', directory: '🔒 Private', description: undefined })) },
+    sessions: { ...cursor.sessions, data: cursor.sessions.data.map((session) => ({ ...session, directory: '🔒 Private', model: undefined, conversations: 0, filesTouched: 0 })) },
   }
 }
 
