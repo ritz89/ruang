@@ -4,10 +4,11 @@ import { fileURLToPath } from 'node:url'
 import express, { type NextFunction, type Request, type Response } from 'express'
 import { alwaysHiddenFor, excludedFor, FolderError, listFolder, publicAgent, readFolderFile, resolveAgentFolders } from './folders.js'
 import { installAccess } from './access.js'
-import { redactActivity, redactCalendar, redactDashboard, redactLogs, redactMemory, redactOffice, redactTasks, redactUsage } from './privacy.js'
+import { redactActivity, redactCalendar, redactDashboard, redactLogs, redactMemory, redactOffice, redactSubagents, redactTasks, redactUsage } from './privacy.js'
 import { installProfileLock, isHidden, type Privacy } from './profile-lock.js'
 import { API_VERSION } from './api-version.js'
 import { collectMemory } from './memory.js'
+import { getSubagents } from './delegation.js'
 import { getActivity, getCalendar, getChannels, getCommandLog, getDashboard, getKnowledge, getLogs, getOffice, getSnapshot, getTaskBoard, getTaskDetail, getUsage } from './mission-control.js'
 
 const HOST = '127.0.0.1'
@@ -43,6 +44,8 @@ const routes: Record<string, (now: number, privacy: Privacy) => Promise<unknown>
   '/api/activity': async (now, privacy) => redactActivity(await getActivity(now), privacy),
   '/api/knowledge': getKnowledge,
   '/api/office': async (now, privacy) => redactOffice(await getOffice(now), privacy),
+  // Delegation children: read-only, from the local live-transcript manifests (no command is run).
+  '/api/subagents': async (now, privacy) => redactSubagents(await getSubagents(now), privacy),
   '/api/channels': getChannels,
   '/api/logs': async (now, privacy) => redactLogs(await getLogs(now), privacy),
   '/api/command-log': () => getCommandLog(),

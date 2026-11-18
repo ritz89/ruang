@@ -22,9 +22,37 @@ export interface Channel { name: string; status: 'Configured' | 'Connected' }
 export interface ChannelSnapshot { channels: Source<Channel[]>; activeSessions?: number; fetchedAt: string }
 export type OfficeState = 'Idle' | 'Working' | 'Reviewing' | 'Collaborating' | 'Offline' | 'Unknown'
 export type OfficeRoom = 'Workspace' | 'Lounge'
-export interface OfficeStation {
-  /** Agent id: the Hermes profile name, or `opencode`. Also the key for its folder and memory. */
+/** A delegation child: an agent that exists only while its batch runs (read from the live transcript manifest). */
+export interface SubagentRun {
   id: string
+  delegation: string
+  /** The delegation id without its `deleg_` prefix. */
+  short: string
+  index: number
+  total: number
+  label: string
+  goal: string
+  status: 'running' | 'completed' | 'failed' | 'unknown'
+  /** True only while it is running and its transcript was written recently. */
+  live: boolean
+  /** The Hermes profile whose delegation this child belongs to. */
+  profile: string
+  model?: string
+  startedAt?: string
+  lastOutputAt?: string
+}
+export interface SubagentSnapshot { runs: Source<SubagentRun[]>; live: number; fetchedAt: string }
+/** What a subagent station carries about its own child. */
+export interface SubagentFacts { delegation: string; index: number; total: number; label: string; goal: string; model?: string; status: SubagentRun['status']; startedAt?: string; lastOutputAt?: string }
+export interface OfficeStation {
+  /** Agent id: the Hermes profile name, `opencode`, or `sub:<delegation>#<index>` for a delegation child. */
+  id: string
+  /** Set on agents that are not plain Hermes profiles: OpenCode and delegation subagents. */
+  kind?: 'opencode' | 'subagent'
+  /** Subagent stations only: the Hermes profile whose delegation this child belongs to. */
+  parent?: string
+  /** Subagent stations only: the child's own facts (there is no profile folder or memory behind it). */
+  subagent?: SubagentFacts
   /** Profile lock: `locked` withholds its private data in this browser, `unlocked` is opened with the PIN. */
   privacy?: 'locked' | 'unlocked'
   name: string
@@ -39,7 +67,7 @@ export interface OfficeStation {
   provenance: string
   freshness: string
 }
-export interface OfficeSummary { declared: number; active: number; idle: number; offline: number; unknown: number; gatewaysReachable: number; gatewaysDeclared: number }
+export interface OfficeSummary { declared: number; active: number; idle: number; offline: number; unknown: number; /** Delegation children working right now; present only while there are any. */ subagents?: number; gatewaysReachable: number; gatewaysDeclared: number }
 export interface OfficeSnapshot { stations: OfficeStation[]; summary: OfficeSummary; fetchedAt: string }
 export interface UsageInsights {
   days: number

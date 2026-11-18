@@ -58,7 +58,7 @@ Checks: `npm run lint`, `npm test`, `npm run build`.
 
 ## Pages
 
-- **Agents**: every agent on this machine, with model, gateway state and what it is doing in the office. Agents are discovered, not configured: every Hermes profile from `hermes profile list` is an agent, plus OpenCode when it is installed. New profiles appear automatically, and each agent gets its own character colours derived from its name.
+- **Agents**: every agent on this machine, with model, gateway state and what it is doing in the office. Agents are discovered, not configured: every Hermes profile from `hermes profile list` is an agent, plus OpenCode when it is installed, plus every child of a running delegation — a subagent is an agent while its batch works and leaves when it finishes. New profiles and new delegations appear automatically, and each agent gets its own character colours derived from its name. The bottom of the page lists the subagents working right now and the ones that finished most recently.
 - **Office** (home page): the office fills the screen below the header. A HUD across the top shows crew active, gateways running, running/open tasks, the next cron run and (when any) failed CLI reads; chips link to their page. The **Panel** button opens one side panel with three tabs: **Crew** (crew snapshot and a clickable list of stations), **Stats** (statistics across every source, token usage, the Kanban status breakdown, runtime and what is up next; tiles link to their pages) and **Activity** (unattributed session metadata and messaging channels). The **Tasks**, **Calendar** and **Tokens** buttons open the Task Board, a month calendar of cron runs or token usage over the office, without leaving it (Esc or ✕ closes them; *Open full page* goes to the page). `#/dashboard` opens the Office.
 
   The view switches between **3D** (the default) and **2D**, remembered per browser; browsers without WebGL stay on 2D. The 3D view (three.js via React Three Fiber, loaded only when used) is an office of several rooms with an Indonesian touch:
@@ -73,7 +73,7 @@ Checks: `npm run lint`, `npm test`, `npm run build`.
   It follows the theme: day in light mode, evening in dark mode, when the office lights, street lamps and cart lamps light up. Only procedural textures are used, with no image or model files. Drag to rotate, scroll to zoom, and pan with right-drag, two fingers, the arrow keys, or the **Geser** button (which makes a plain drag pan). Panning stays within the grounds, and **Reset view** returns to the starting view.
 
   The building has two floors; the buttons at the top left of the 3D view (or Page Up / Page Down) switch between them, each showing how many agents are on it. **Lantai 1** is the office. **Lantai 2**, up the stairs by the entrance, has a dorm bedroom with one bed per agent, a lesehan corner, a bathroom, and a ruko-style balcony with rattan chairs, a hammock, a clothes line and string lights; the lower floor turns into a closed building below it, and agents outside on the ground stay in view. Idle agents also go upstairs to sleep, nap in the hammock or sit on the balcony; the **💤 Tidur** button sends every idle agent to bed (remembered per browser, like the floor). Sleeping is decorative only, like the rest of the idle wandering.
-  Each agent has its own desk. An agent replying to a chat walks into the meeting room through its door: the first one presents at the whiteboard, the others take a chair; one running a cron job, tools or a Kanban task sits at its desk with a speech bubble saying what it is doing. Agents walk along the aisle and use the entrance, never through furniture or walls. Idle agents do not just sit: every 32 seconds each one moves on to another stop, such as relaxing in the lounge, ping-pong, arcade games or the console in the game room, getting water from the galon, the kitchen, bakso on the cart's stools, coffee at the bike, or a stroll to the flag or the bookshelf. A dashed bubble says where they are. This wandering is decorative only (the same clock-based route for everyone), and the Idle state itself comes from the server. Click an agent for its detail dialog, with three tabs: **Overview** (state, task, provenance, freshness), **Folder** (that agent's own folder, read-only, as on the Folders page) and **Memory** (its SOUL.md, MEMORY.md, USER.md and context files).
+  Each agent has its own desk. An agent replying to a chat walks into the meeting room through its door: the first one presents at the whiteboard, the others take a chair; one running a cron job, tools or a Kanban task sits at its desk with a speech bubble saying what it is doing. Agents walk along the aisle and use the entrance, never through furniture or walls. Idle agents do not just sit: every 32 seconds each one moves on to another stop, such as relaxing in the lounge, ping-pong, arcade games or the console in the game room, getting water from the galon, the kitchen, bakso on the cart's stools, coffee at the bike, or a stroll to the flag or the bookshelf. A dashed bubble says where they are. This wandering is decorative only (the same clock-based route for everyone), and the Idle state itself comes from the server. Click an agent for its detail dialog, with three tabs: **Overview** (state, task, provenance, freshness), **Folder** (that agent's own folder, read-only, as on the Folders page) and **Memory** (its SOUL.md, MEMORY.md, USER.md and context files). A subagent has no profile behind it, so its dialog is Overview only, with the delegation it belongs to.
 - **Task Board**: Hermes Kanban in board order (triage → todo → scheduled → ready → running → blocked → review → done) with search, assignee filter and priority. Tasks from every Kanban board are shown (not only the current one), with a board filter when there is more than one. Each column is at most as tall as the screen and scrolls on its own, so the board's sideways scrollbar stays in view; the strip above the board scrolls it (‹ ›) or jumps to a column by its status chip. Click a card for its full detail from `hermes kanban show <id> --json`: description, result or latest summary, workspace, branch, skills, model, timestamps, dependencies (clickable), runs, comments and activity. Free text is secret-redacted; only ids on the board snapshot can be opened.
 - **Calendar**: a month calendar of the cron runs of every agent (each job is labelled with its agent, and the calendar can be filtered by agent) (upcoming runs from today, repeating jobs, overdue runs and last-run outcomes, read from 5-field cron expressions and `every …` intervals, in the Hermes host's local time), plus the list of jobs with status, next run, overdue and last-run outcome. Paused jobs only show their last run.
 - **Activity**: the 20 most recent sessions with search.
@@ -157,6 +157,8 @@ The server uses only these fixed, read-only commands:
 - for token usage, for every profile (at most four at a time): `hermes -p <profile> insights --days <1|7|30>`
 - for live Office activity, for every profile (at most four at a time): `hermes -p <profile> logs agent -n 80 --since 3m` and `hermes -p <profile> sessions list --limit 3`
 
+The one other source is read directly, without running anything: the delegation live transcripts Hermes writes per child under `<hermes root>/cache/delegation/live/<delegation_id>/` (and the same path inside each `profiles/<name>/`). Ruang reads `manifest.json` and the last-modified time of each `task-N.log` — never the transcript contents — to know that a subagent is working right now.
+
 How they run:
 - Commands run with `NO_COLOR=1` and a wide `COLUMNS` so the plain-text formats parse reliably.
 - The default gateway state is derived from `hermes profile list`; no separate default gateway command is run.
@@ -170,9 +172,9 @@ Only normalized data is exposed:
 - recognized enabled-skill table fields
 - configured messaging-platform names with a generic configured/connected state, and an integer active-session count when it is safely recognized
 
-Log lines are the one intentional exception to "no raw output". They are returned after two redaction passes: Hermes's own secret redaction, then a second pass by the server (API keys, bearer tokens, `key=value` secrets, bot tokens). Home-directory paths are shortened to `~`, and the `hermes logs` header line (which contains a path) is dropped. Cron last-run error text is never returned, only ok/failed.
+Log lines are the one intentional exception to "no raw output". They are returned after two redaction passes: Hermes's own secret redaction, then a second pass by the server (API keys, bearer tokens, `key=value` secrets, bot tokens). Home-directory paths are shortened to `~`, and the `hermes logs` header line (which contains a path) is dropped. Cron last-run error text is never returned, only ok/failed. A subagent's goal label goes through the same second redaction pass before it is shown.
 
-Otherwise, raw CLI output, process details, paths, configuration, credentials, authentication, API keys, environment files, provider details and session databases are never read or returned. A failed source is rendered as `Not Available`; an unknown individual field is rendered as `Unknown`.
+Otherwise, raw CLI output, process details, paths, configuration, credentials, authentication, API keys, environment files, provider details and session databases are never read or returned. A failed source is rendered as `Not Available`; an unknown individual field is rendered as `Unknown`. The delegation manifests are read the same way the Folders page reads a profile folder: read-only, bounded, and normalized to ids, counts, a redacted goal label, a model and timestamps — no session database and no transcript text ever reaches the browser.
 
 `/api/tasks`, `/api/calendar`, `/api/activity` and `/api/knowledge` each return a source availability state and refresh time:
 - Task Board is read-only and does not expose mutations.
@@ -184,7 +186,7 @@ Empty source results remain available and show truthful empty states; unparseabl
 
 ## Office
 
-`/api/office` is a read-only composition of the existing cached runtime, Kanban and activity reads. It has one station per agent (every Hermes profile, plus OpenCode when installed), in the order `hermes profile list` gives them. Desks are hot desks: there is one per agent and none carries a name. Character colours are derived from the agent name, so they are the same on every device. The 2D view lays out Workspace (desks and the meeting room) and Lounge for any number of agents with CSS only; no image or art assets are used.
+`/api/office` is a read-only composition of the existing cached runtime, Kanban and activity reads. It has one station per agent (every Hermes profile, plus OpenCode when installed, plus every subagent working right now), in the order `hermes profile list` gives them, with subagents after them. Desks are hot desks: there is one per agent and none carries a name. Character colours are derived from the agent name, so they are the same on every device. The 2D view lays out Workspace (desks and the meeting room) and Lounge for any number of agents with CSS only; no image or art assets are used.
 
 Office state is one of `Idle`, `Working`, `Reviewing`, `Collaborating` or `Unknown` (`Offline` is reserved and not produced). The precedence is:
 1. A fresh, unexpired internal explicit-state overlay can declare `Working`, `Reviewing` or `Collaborating`.
@@ -210,7 +212,7 @@ State placement is visualized without inventing work:
 - `Idle` is in Lounge (in 3D, wandering the office).
 - `Unknown` is shown at a desk with a labelled neutral presence.
 
-The crew snapshot counts agents, active work (`Working`/`Reviewing`/`Collaborating`), managed idle and unknown separately. Gateway health (how many profiles report their gateway `Running`) is displayed as a separate metric. When a station has several Kanban tasks, the `running` one wins, then `review`, then the first open task.
+The crew snapshot counts agents, active work (`Working`/`Reviewing`/`Collaborating`), managed idle and unknown separately. Subagents are a separate number too: they are never counted as declared agents, but they are counted as active work, because that is what they are. Gateway health (how many profiles report their gateway `Running`) is displayed as a separate metric. When a station has several Kanban tasks, the `running` one wins, then `review`, then the first open task.
 
 `/api/channels` is a separate safe snapshot sourced only from the Messaging Platforms section and active-session count of `hermes status --all`; it never exposes unconfigured platforms or any other status content. The Office introduces no write endpoint, shell input or command beyond the fixed allowlist.
 
@@ -223,6 +225,19 @@ Every Hermes profile writes all of its work to its own `agent.log`: messaging re
 - OpenCode is `Working` when a recent agent log line shows it being driven.
 
 Gateway polling noise and CLI housekeeping lines are ignored.
+
+## Subagents in the Office
+
+A delegation child is an agent too, and for as long as it works it is part of the crew. Hermes writes one manifest plus one append-only transcript per child (`<hermes root>/cache/delegation/live/<delegation_id>/manifest.json` and `task-N.log`), so Ruang can discover the children of a running delegation without asking anyone: the same "discovered, not configured" rule as profiles, one level down. Nothing is registered by hand, and no command is run.
+
+- Each live child gets a station and a hot desk, named `<n>/<total> · <delegation>` (for example `3/10 · 42f188f8`), `Working`, with its goal label in the speech bubble and its own character colours. As a batch grows, the Workspace simply gets more desks.
+- `live` means: the batch is not completed, the child's status is `running`, its transcript was written in the last 5 minutes, and the batch started less than 6 hours ago. A child with no output for 5 minutes is **not** shown as working — the office never invents work — but it still appears on the Agents page as `Started, no output in the last 5m`.
+- When the batch finishes (or its children stop writing), the subagents leave the office and the desks go with them. The Agents page keeps the live ones under **Working right now** and the most recent finished ones under **Recently finished** (`Done` / `Failed`).
+- The station carries only what the manifest already holds: delegation id, 1-based index, total, model (or "inherited from its parent"), status and timestamps. The goal label is Hermes's own capped field, redacted a second time by Ruang. Transcript contents are never read.
+- Subagents follow the profile lock of the profile that dispatched them: locking that profile hides their goal labels and activities too, in the office and on the Agents page.
+- Reads are bounded (the 20 most recent batches, newest first, at most 40 children, 10-second cache) so a machine with months of delegations stays cheap.
+
+`/api/subagents` returns the same snapshot the office uses: every recent child with `live`, `status`, `profile`, `model`, `startedAt` and `lastOutputAt`.
 
 ## Folders
 

@@ -1,5 +1,7 @@
 import { execFile as execFileCallback } from 'node:child_process'
 import { promisify } from 'node:util'
+import { getSubagents, type SubagentRun, type SubagentSnapshot } from './delegation.js'
+import { redactLogLine } from './redact.js'
 
 const execFile = promisify(execFileCallback)
 const CACHE_MS = 10_000
@@ -39,8 +41,14 @@ export interface ChannelSnapshot { channels: Source<Channel[]>; activeSessions?:
 export type OfficeState = 'Idle' | 'Working' | 'Reviewing' | 'Collaborating' | 'Offline' | 'Unknown'
 export type OfficeRoom = 'Workspace' | 'Lounge'
 export interface OfficeStation {
-  /** Agent id: the Hermes profile name, or `opencode`. Also the key for its folder and memory. */
+  /** Agent id: the Hermes profile name, `opencode`, or `sub:<delegation>#<index>` for a delegation child. */
   id: string
+  /** Set on agents that are not plain Hermes profiles: OpenCode and delegation subagents. */
+  kind?: 'opencode' | 'subagent'
+  /** Subagent stations only: the Hermes profile whose delegation this child belongs to. */
+  parent?: string
+  /** Subagent stations only: the child's own facts, from the delegation manifest (read-only). */
+  subagent?: { delegation: string; index: number; total: number; label: string; goal: string; model?: string; status: SubagentRun['status']; startedAt?: string; lastOutputAt?: string }
   /** Profile lock: `locked` withholds its private data in this browser, `unlocked` is opened with the PIN. */
   privacy?: 'locked' | 'unlocked'
   name: string
@@ -61,9 +69,9 @@ export type ActivityKind = 'chat' | 'cron' | 'tools' | 'thinking'
 export interface AgentActivity { profile: string; availability: Availability; active: boolean; kind?: ActivityKind; label?: string; lastSeen?: string; mentionsOpenCode: boolean }
 export interface AgentActivitySnapshot { agents: AgentActivity[]; fetchedAt: string }
 export interface OfficeSnapshot { stations: OfficeStation[]; summary: OfficeSummary; fetchedAt: string }
-export interface OfficeSummary { declared: number; active: number; idle: number; offline: number; unknown: number; gatewaysReachable: number; gatewaysDeclared: number }
+export interface OfficeSummary { declared: number; active: number; idle: number; offline: number; unknown: number; subagents?: number; gatewaysReachable: number; gatewaysDeclared: number }
 export interface ExplicitOfficeState { station: OfficeStation['name']; state: 'Working' | 'Reviewing' | 'Collaborating'; expiresAt: string }
-export interface OfficeBuildOptions { now?: string | number; explicitStates?: ExplicitOfficeState[]; agentActivity?: AgentActivitySnapshot }
+export interface OfficeBuildOptions { now?: string | number; explicitStates?: ExplicitOfficeState[]; agentActivity?: AgentActivitySnapshot; subagents?: SubagentSnapshot }
 export interface UsageInsights {
   days: number
   sessions: number
@@ -400,19 +408,8 @@ export function parseInsights(output: string, days: number): UsageInsights {
   }
 }
 
-const SECRET_PATTERNS: [RegExp, string][] = [
-  [/\b(sk|pk|rk|xox[abprs]|ghp|gho|ghs|github_pat|glpat|AKIA)[-_A-Za-z0-9]{8,}/g, '[redacted]'],
-  [/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, '$1 [redacted]'],
-  // Values shorter than 8 characters (e.g. `max_tokens: 4096`) are settings, not secrets.
-  [/\b([A-Za-z_]*(?:api[_-]?key|token|secret|password|passwd|authorization|cookie)[A-Za-z_]*)(["']?\s*[:=]\s*["']?)(?!\[redacted\])[^\s"',}]{8,}/gi, '$1$2[redacted]'],
-  [/\b\d{8,10}:[A-Za-z0-9_-]{30,}\b/g, '[redacted]'],
-  [/(?:\/home|\/Users)\/[^/\s]+|\/root(?=\/|\b)/g, '~'],
-]
-
-export function redactLogLine(line: string, maxLength = 600): string {
-  const redacted = SECRET_PATTERNS.reduce((value, [pattern, replacement]) => value.replace(pattern, replacement), line)
-  return redacted.length > maxLength ? `${redacted.slice(0, maxLength)}…` : redacted
-}
+// Secret redaction lives in redact.ts (delegation.ts needs it without importing this module).
+export { redactLogLine } from './redact.js'
 
 const LOG_LEVEL = /^\d{4}-\d{2}-\d{2}[ T][\d:,.]+\s+(DEBUG|INFO|WARNING|WARN|ERROR|CRITICAL)\b/
 
@@ -818,13 +815,22 @@ export async function collectAgentActivity(profiles: readonly string[], run: Run
 // ---------------------------------------------------------------------------
 // Office
 
-/** One office station per agent: every Hermes profile, plus OpenCode when it is installed. */
-interface AgentSpec { id: string; role: string; profile?: string; gateway?: GatewayState; aliases: string[] }
+/**
+ * One office station per agent: every Hermes profile, OpenCode when it is installed, and the
+ * children of a running delegation. A subagent counts as an agent while its batch runs and leaves
+ * the office when it finishes, so the roster is built from the live snapshots, never from config.
+ */
+interface AgentSpec { id: string; role: string; kind?: 'opencode' | 'subagent'; profile?: string; gateway?: GatewayState; aliases: string[]; subagent?: SubagentRun }
 
-export function agentRoster(runtime: RuntimeSnapshot): AgentSpec[] {
+export function agentRoster(runtime: RuntimeSnapshot, subagents?: SubagentSnapshot): AgentSpec[] {
   const profiles = runtime.profiles.availability === 'available' ? runtime.profiles.data : []
   const agents: AgentSpec[] = profiles.filter((profile) => PROFILE_NAME.test(profile.name)).map((profile) => ({ id: profile.name, role: 'Hermes profile', profile: profile.name, gateway: profile.gateway, aliases: [profile.name.toLowerCase()] }))
-  if (runtime.openCode.availability === 'available' && !agents.some((agent) => agent.id === 'opencode')) agents.push({ id: 'opencode', role: 'OpenCode', aliases: ['opencode', 'open-code'] })
+  if (runtime.openCode.availability === 'available' && !agents.some((agent) => agent.id === 'opencode')) agents.push({ id: 'opencode', role: 'OpenCode', kind: 'opencode', aliases: ['opencode', 'open-code'] })
+  // Only the children that are working right now get a station; finished ones live on the Agents page.
+  for (const run of subagents?.runs.availability === 'available' ? subagents.runs.data : []) {
+    if (!run.live || agents.some((agent) => agent.id === run.id)) continue
+    agents.push({ id: run.id, role: 'Subagent (delegation child)', kind: 'subagent', profile: run.profile, aliases: [run.id.toLowerCase()], subagent: run })
+  }
   return agents
 }
 
@@ -874,14 +880,22 @@ function roomForState(state: OfficeState, index: number): Pick<OfficeStation, 'r
   return { room: 'Workspace', roomPosition: 'neutral-presence' }
 }
 
+/**
+ * `declared` counts the agents this machine reports (Hermes profiles and OpenCode). A delegation
+ * child is declared nowhere, so it is counted separately in `subagents` while it works — but it
+ * still counts as active work, because that is what it is.
+ */
 export function buildOfficeSummary(stations: OfficeStation[], runtime: RuntimeSnapshot): OfficeSummary {
   const gateways = runtime.profiles.availability === 'available' ? runtime.profiles.data.map((profile) => profile.gateway) : []
+  const declared = stations.filter((station) => station.kind !== 'subagent')
+  const subagents = stations.filter((station) => station.kind === 'subagent').length
   return {
-    declared: stations.length,
+    declared: declared.length,
     active: stations.filter((station) => ['Working', 'Reviewing', 'Collaborating'].includes(station.state)).length,
-    idle: stations.filter((station) => station.state === 'Idle').length,
-    offline: stations.filter((station) => station.state === 'Offline').length,
-    unknown: stations.filter((station) => station.state === 'Unknown').length,
+    idle: declared.filter((station) => station.state === 'Idle').length,
+    offline: declared.filter((station) => station.state === 'Offline').length,
+    unknown: declared.filter((station) => station.state === 'Unknown').length,
+    ...(subagents > 0 ? { subagents } : {}),
     gatewaysReachable: gateways.filter((gateway) => gateway === 'Running').length,
     gatewaysDeclared: gateways.length,
   }
@@ -899,6 +913,34 @@ function liveState(agent: AgentSpec, snapshot: AgentActivitySnapshot | undefined
   return { state: probe.active ? (probe.kind === 'chat' ? 'Collaborating' : 'Working') : 'Unknown', probe, known: true }
 }
 
+/**
+ * A delegation child at a desk. It is Working by definition — a station is only built for a child
+ * whose transcript was written recently — and its evidence is that transcript's timestamps, never
+ * the user's words beyond the goal label Hermes already capped.
+ */
+function subagentStation(run: SubagentRun, index: number, snapshot: SubagentSnapshot | undefined, now: number): OfficeStation {
+  const started = run.startedAt ? Date.parse(run.startedAt) : undefined
+  const lastOutput = run.lastOutputAt ? Date.parse(run.lastOutputAt) : undefined
+  const since = (timestamp: number | undefined) => timestamp === undefined ? 'unknown' : `${Math.max(0, Math.round((now - timestamp) / 1000))}s ago`
+  return {
+    id: run.id,
+    kind: 'subagent',
+    parent: run.profile,
+    subagent: { delegation: run.delegation, index: run.index, total: run.total, label: run.label, goal: run.goal, ...(run.model ? { model: run.model } : {}), status: run.status, ...(run.startedAt ? { startedAt: run.startedAt } : {}), ...(run.lastOutputAt ? { lastOutputAt: run.lastOutputAt } : {}) },
+    name: `${run.index + 1}/${run.total} · ${run.short}`,
+    role: 'Subagent (delegation child)',
+    room: 'Workspace',
+    roomPosition: 'assigned-desk',
+    seat: index + 1,
+    state: 'Working',
+    currentTask: run.goal || run.label,
+    recentActivity: `Transcript written ${since(lastOutput)} (started ${since(started)})`,
+    activity: `Subagent: ${run.label}`,
+    provenance: `Child ${run.index + 1} of ${run.total} of delegation ${run.delegation} (parent profile ${run.profile}); one read-only manifest and transcript per child under the Hermes delegation cache; running since ${run.startedAt ?? 'unknown'}; model ${run.model ?? 'inherited from its parent'}; status ${run.status}`,
+    freshness: `Delegation ${snapshot?.fetchedAt ?? 'unknown'}`,
+  }
+}
+
 export function buildOfficeSnapshot(runtime: RuntimeSnapshot, board: TaskBoardSnapshot, activity: ActivitySnapshot, options: OfficeBuildOptions = {}): OfficeSnapshot {
   const fetchedAt = new Date().toISOString()
   const now = typeof options.now === 'number' ? options.now : options.now ? Date.parse(options.now) : Date.now()
@@ -907,7 +949,8 @@ export function buildOfficeSnapshot(runtime: RuntimeSnapshot, board: TaskBoardSn
   const freshActivity = activity.sessions.availability === 'available' && isFresh(activity.fetchedAt, now)
   const agentActivity = options.agentActivity && isFresh(options.agentActivity.fetchedAt, now) ? options.agentActivity : undefined
   const explicitStates = options.explicitStates ?? []
-  const stations = agentRoster(runtime).map((agent, index): OfficeStation => {
+  const stations = agentRoster(runtime, options.subagents).map((agent, index): OfficeStation => {
+    if (agent.kind === 'subagent' && agent.subagent) return subagentStation(agent.subagent, index, options.subagents, now)
     const gateway = agent.gateway
     const task = freshBoard ? attributedTask(board.tasks.data, agent.aliases) : undefined
     const overlay = explicitState(agent, explicitStates, now)
@@ -1030,12 +1073,12 @@ export async function getTaskDetail(id: string, now = Date.now(), board?: string
 }
 
 export async function getOffice(now = Date.now()): Promise<OfficeSnapshot> {
-  const [runtime, board, activity, agentActivity] = await Promise.all([getSnapshot(now), getTaskBoard(now), getActivity(now), agentActivitySource(now)])
-  return buildOfficeSnapshot(runtime, board, activity, { agentActivity })
+  const [runtime, board, activity, agentActivity, subagents] = await Promise.all([getSnapshot(now), getTaskBoard(now), getActivity(now), agentActivitySource(now), getSubagents(now)])
+  return buildOfficeSnapshot(runtime, board, activity, { agentActivity, subagents })
 }
 
 export async function getDashboard(now = Date.now()): Promise<DashboardSnapshot> {
-  const [runtime, board, calendar, activity, knowledge, channels, agentActivity] = await Promise.all([getSnapshot(now), getTaskBoard(now), getCalendar(now), getActivity(now), getKnowledge(now), getChannels(now), agentActivitySource(now)])
-  const office = buildOfficeSnapshot(runtime, board, activity, { agentActivity })
+  const [runtime, board, calendar, activity, knowledge, channels, agentActivity, subagents] = await Promise.all([getSnapshot(now), getTaskBoard(now), getCalendar(now), getActivity(now), getKnowledge(now), getChannels(now), agentActivitySource(now), getSubagents(now)])
+  const office = buildOfficeSnapshot(runtime, board, activity, { agentActivity, subagents })
   return buildDashboard({ runtime, board, calendar, activity, knowledge, channels, office, commands: commandHealth() })
 }
