@@ -1,4 +1,5 @@
 import type { MemorySnapshot } from './memory.js'
+import type { SubagentSnapshot } from './delegation.js'
 import type { ActivitySnapshot, CalendarSnapshot, DashboardSnapshot, LogsSnapshot, OfficeSnapshot, TaskBoardSnapshot, UsageSnapshot } from './mission-control.js'
 import { isHidden, type Privacy } from './profile-lock.js'
 
@@ -18,7 +19,9 @@ export function redactOffice(office: OfficeSnapshot, privacy: Privacy): OfficeSn
   return {
     ...office,
     stations: office.stations.map((station) => {
-      if (!isHidden(privacy, station.id)) return privacy.locked.has(station.id) ? { ...station, privacy: 'unlocked' as const } : station
+      // A subagent station belongs to its parent profile: locking the parent hides the child's work too.
+      const hidden = isHidden(privacy, station.id) || (station.kind === 'subagent' && isHidden(privacy, station.parent))
+      if (!hidden) return privacy.locked.has(station.id) ? { ...station, privacy: 'unlocked' as const } : station
       const busy = station.state !== 'Idle' && station.state !== 'Offline' && station.state !== 'Unknown'
       // Provenance names the kind of live activity (chat, cron, tools…), so it is withheld too.
       return { ...station, privacy: 'locked' as const, currentTask: '🔒 Private', recentActivity: '🔒 Private', provenance: '🔒 Private (profile lock)', activity: busy && station.activity ? `🔒 ${station.state}` : station.state === 'Idle' ? 'On a break' : '' }
@@ -54,6 +57,14 @@ export function redactLogs(logs: LogsSnapshot, privacy: Privacy): LogsSnapshot {
 export function redactUsage(usage: UsageSnapshot, privacy: Privacy): UsageSnapshot {
   if (quiet(privacy)) return usage
   return { ...usage, agents: usage.agents.map((agent) => isHidden(privacy, agent.agent) && agent.usage ? { ...agent, usage: { ...agent.usage, topSession: undefined } } : agent) }
+}
+
+export function redactSubagents(subagents: SubagentSnapshot, privacy: Privacy): SubagentSnapshot {
+  if (quiet(privacy)) return subagents
+  return {
+    ...subagents,
+    runs: { ...subagents.runs, data: subagents.runs.data.map((run) => isHidden(privacy, run.profile) ? { ...run, label: '🔒 Private subagent', goal: '', model: undefined } : run) },
+  }
 }
 
 export function redactMemory(memory: MemorySnapshot, privacy: Privacy): MemorySnapshot {

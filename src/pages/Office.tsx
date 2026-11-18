@@ -81,7 +81,7 @@ export function OfficeDetail({ station, onClose }: { station: OfficeStation; onC
   const [tab, setTab] = useState<DetailTab>('Overview')
   useEffect(() => { closeRef.current?.focus() }, [])
   const badge = officeStateBadge(station.state)
-  const profile = station.id
+  const profile = station.kind === 'subagent' ? undefined : station.id
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.key === 'Escape') { event.stopPropagation(); onClose(); return }
     if (event.key !== 'Tab') return
@@ -101,10 +101,10 @@ export function OfficeDetail({ station, onClose }: { station: OfficeStation; onC
       <div className="detail-head"><div className="detail-avatar"><PixelCharacter agent={station.id}/></div><div><p className="eyebrow">STATION DETAIL</p><h2 id="office-detail-title">{station.name}</h2><span className={`badge ${badge.tone}`}>{officeStateLabel(station)}</span>{station.privacy === 'locked' && <span className="badge muted">🔒 Locked</span>}</div></div>
       {profile && <div className="detail-tabs" role="tablist" aria-label={`${station.name} details`}>{DETAIL_TABS.map((item) => <button type="button" role="tab" key={item} aria-selected={tab === item} className={tab === item ? 'active' : ''} onClick={() => setTab(item)}>{item}</button>)}</div>}
       <div role="tabpanel" aria-label={tab} className="detail-body">
-        {tab === 'Overview' && <>{station.privacy === 'locked' && <p className="file-notice">🔒 {station.name} is locked: its task, activity, memory and files are private. Open the Folder or Memory tab to enter the PIN.</p>}
+        {tab === 'Overview' && <>{station.privacy === 'locked' && <p className="file-notice">🔒 {station.name} is locked: its task, activity, memory and files are private.{profile ? ' Open the Folder or Memory tab to enter the PIN.' : ''}</p>}
           {station.privacy === 'unlocked' && <RelockBar agent={station.id} minutes={15}/>}
           {station.activity && <p className="detail-activity">{station.activity}</p>}
-          <dl className="office-detail-grid"><div><dt>Agent type</dt><dd>{station.role}</dd></div>{station.role !== 'OpenCode' && <AgentTokens agent={station.id}/>}<div><dt>Current room</dt><dd>{station.room} / {station.roomPosition}</dd></div><div><dt>Current task</dt><dd>{station.currentTask}</dd></div><div><dt>Recent activity</dt><dd>{station.recentActivity}</dd></div><div><dt>Source / provenance</dt><dd>{station.provenance}</dd></div><div><dt>Freshness</dt><dd>{station.freshness}</dd></div></dl></>}
+          <dl className="office-detail-grid"><div><dt>Agent type</dt><dd>{station.role}</dd></div>{station.subagent && <><div><dt>Delegation</dt><dd>{station.subagent.delegation}</dd></div><div><dt>Child</dt><dd>{station.subagent.index + 1} of {station.subagent.total}</dd></div><div><dt>Subagent model</dt><dd>{station.subagent.model ?? 'inherited from its parent'}</dd></div><div><dt>Doing</dt><dd>{station.subagent.label}</dd></div></>}{station.kind !== 'subagent' && station.role !== 'OpenCode' && <AgentTokens agent={station.id}/>}<div><dt>Current room</dt><dd>{station.room} / {station.roomPosition}</dd></div><div><dt>Current task</dt><dd>{station.currentTask}</dd></div><div><dt>Recent activity</dt><dd>{station.recentActivity}</dd></div><div><dt>Source / provenance</dt><dd>{station.provenance}</dd></div><div><dt>Freshness</dt><dd>{station.freshness}</dd></div></dl></>}
         {tab === 'Folder' && profile && <AgentFolder profile={profile}/>}
         {tab === 'Memory' && profile && <AgentMemoryView profile={profile}/>}
       </div>
@@ -137,7 +137,8 @@ function hudItems(office: OfficeSnapshot | undefined, dashboard: DashboardSnapsh
   const summary = office?.summary ?? dashboard?.office
   const items: HudItem[] = []
   if (summary) {
-    items.push({ label: 'Crew active', value: `${summary.active}/${summary.declared}`, title: `${summary.idle} idle · ${summary.offline} offline · ${summary.unknown} unknown` })
+    items.push({ label: 'Crew active', value: `${Math.max(0, summary.active - (summary.subagents ?? 0))}/${summary.declared}`, title: `${summary.idle} idle · ${summary.offline} offline · ${summary.unknown} unknown` })
+    if (summary.subagents) items.push({ label: 'Subagents', value: String(summary.subagents), title: 'Children of a running delegation, discovered from their live transcripts; each one sits at a desk while it works', page: 'Agents' })
     items.push({ label: 'Gateways', value: `${summary.gatewaysReachable}/${summary.gatewaysDeclared}`, title: 'Profiles whose Hermes gateway is running (CLI-only agents need none)', page: 'Agents' })
   }
   if (!dashboard) return items
@@ -223,7 +224,7 @@ export function Office({ dashboard, dashboardPending = false, onNavigate }: { da
       <div className="office-panel-body" role="tabpanel" aria-label={panel}>
         {panel === 'Crew' && <>
           <SourceStatus source={office ? { availability: 'available', data: null } : undefined} fetchedAt={office?.fetchedAt} request={snapshot}/>
-          <section className="office-summary"><p className="eyebrow">CREW SNAPSHOT</p><strong>{office?.summary.active ?? 0} active work</strong><span>{office?.summary.idle ?? 0} Idle (managed)</span><span>{office?.summary.unknown ?? 0} Unknown / {office?.summary.offline ?? 0} Offline</span><hr/><span>Gateways running: {office ? `${office.summary.gatewaysReachable} of ${office.summary.gatewaysDeclared}` : 'Not Available'}</span></section>
+          <section className="office-summary"><p className="eyebrow">CREW SNAPSHOT</p><strong>{office?.summary.active ?? 0} active work</strong>{office?.summary.subagents ? <span>{office.summary.subagents} subagent{office.summary.subagents === 1 ? '' : 's'} working now</span> : null}<span>{office?.summary.idle ?? 0} Idle (managed)</span><span>{office?.summary.unknown ?? 0} Unknown / {office?.summary.offline ?? 0} Offline</span><hr/><span>Gateways running: {office ? `${office.summary.gatewaysReachable} of ${office.summary.gatewaysDeclared}` : 'Not Available'}</span></section>
           <div className="crew-list">{office?.stations.map(stationButton)}</div>
           <small className="muted">Stations show only attributable work. Select one for its evidence and freshness.</small>
         </>}

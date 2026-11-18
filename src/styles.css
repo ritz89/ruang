@@ -671,6 +671,12 @@ aside.office-panel { background: color-mix(in srgb, var(--surface) 96%, transpar
 .agent-card dl > div { align-items: baseline; display: flex; gap: 8px; justify-content: space-between; }
 .agent-card dt { margin: 0; }
 .agent-card dd { overflow-wrap: anywhere; text-align: right; }
+.subagents { border-top: 1px solid var(--border); margin-top: 52px; padding-top: 24px; }
+.subagents .eyebrow { align-items: center; display: flex; gap: 8px; margin: 0 0 6px; }
+.subagents h2 { font-size: 22px; letter-spacing: -.03em; margin: 0; }
+.subagents .agent-grid { margin-top: 16px; }
+.subagents .subagent-recent { margin-top: 32px; }
+.subagents small { display: block; line-height: 1.6; margin-top: 22px; max-width: 76ch; }
 
 /* 2D office for any crew size: a grid of unlabeled hot desks, the meeting table and the lounge
    flow instead of fixed seat positions. */
