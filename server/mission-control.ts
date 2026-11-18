@@ -1,6 +1,7 @@
 import { execFile as execFileCallback } from 'node:child_process'
 import { promisify } from 'node:util'
 import { getSubagents, type SubagentRun, type SubagentSnapshot } from './delegation.js'
+import { getCursor, type CursorSession, type CursorSnapshot } from './cursor.js'
 import { redactLogLine } from './redact.js'
 
 const execFile = promisify(execFileCallback)
@@ -41,14 +42,16 @@ export interface ChannelSnapshot { channels: Source<Channel[]>; activeSessions?:
 export type OfficeState = 'Idle' | 'Working' | 'Reviewing' | 'Collaborating' | 'Offline' | 'Unknown'
 export type OfficeRoom = 'Workspace' | 'Lounge'
 export interface OfficeStation {
-  /** Agent id: the Hermes profile name, `opencode`, or `sub:<delegation>#<index>` for a delegation child. */
+  /** Agent id: a Hermes profile name, `opencode`, `sub:<delegation>#<index>`, or `cursor:<project>`. */
   id: string
-  /** Set on agents that are not plain Hermes profiles: OpenCode and delegation subagents. */
-  kind?: 'opencode' | 'subagent'
+  /** Set on agents that are not plain Hermes profiles: OpenCode, delegation children, Cursor sessions. */
+  kind?: 'opencode' | 'subagent' | 'cursor'
   /** Subagent stations only: the Hermes profile whose delegation this child belongs to. */
   parent?: string
   /** Subagent stations only: the child's own facts, from the delegation manifest (read-only). */
   subagent?: { delegation: string; index: number; total: number; label: string; goal: string; model?: string; status: SubagentRun['status']; startedAt?: string; lastOutputAt?: string }
+  /** Cursor stations only: the project session Cursor's own local records show it working in. */
+  cursor?: CursorSession
   /** Profile lock: `locked` withholds its private data in this browser, `unlocked` is opened with the PIN. */
   privacy?: 'locked' | 'unlocked'
   name: string
@@ -69,9 +72,9 @@ export type ActivityKind = 'chat' | 'cron' | 'tools' | 'thinking'
 export interface AgentActivity { profile: string; availability: Availability; active: boolean; kind?: ActivityKind; label?: string; lastSeen?: string; mentionsOpenCode: boolean }
 export interface AgentActivitySnapshot { agents: AgentActivity[]; fetchedAt: string }
 export interface OfficeSnapshot { stations: OfficeStation[]; summary: OfficeSummary; fetchedAt: string }
-export interface OfficeSummary { declared: number; active: number; idle: number; offline: number; unknown: number; subagents?: number; gatewaysReachable: number; gatewaysDeclared: number }
+export interface OfficeSummary { declared: number; active: number; idle: number; offline: number; unknown: number; subagents?: number; cursor?: number; gatewaysReachable: number; gatewaysDeclared: number }
 export interface ExplicitOfficeState { station: OfficeStation['name']; state: 'Working' | 'Reviewing' | 'Collaborating'; expiresAt: string }
-export interface OfficeBuildOptions { now?: string | number; explicitStates?: ExplicitOfficeState[]; agentActivity?: AgentActivitySnapshot; subagents?: SubagentSnapshot }
+export interface OfficeBuildOptions { now?: string | number; explicitStates?: ExplicitOfficeState[]; agentActivity?: AgentActivitySnapshot; subagents?: SubagentSnapshot; cursor?: CursorSnapshot }
 export interface UsageInsights {
   days: number
   sessions: number
@@ -820,9 +823,9 @@ export async function collectAgentActivity(profiles: readonly string[], run: Run
  * children of a running delegation. A subagent counts as an agent while its batch runs and leaves
  * the office when it finishes, so the roster is built from the live snapshots, never from config.
  */
-interface AgentSpec { id: string; role: string; kind?: 'opencode' | 'subagent'; profile?: string; gateway?: GatewayState; aliases: string[]; subagent?: SubagentRun }
+interface AgentSpec { id: string; role: string; kind?: 'opencode' | 'subagent' | 'cursor'; profile?: string; gateway?: GatewayState; aliases: string[]; subagent?: SubagentRun; cursor?: CursorSession }
 
-export function agentRoster(runtime: RuntimeSnapshot, subagents?: SubagentSnapshot): AgentSpec[] {
+export function agentRoster(runtime: RuntimeSnapshot, subagents?: SubagentSnapshot, cursor?: CursorSnapshot): AgentSpec[] {
   const profiles = runtime.profiles.availability === 'available' ? runtime.profiles.data : []
   const agents: AgentSpec[] = profiles.filter((profile) => PROFILE_NAME.test(profile.name)).map((profile) => ({ id: profile.name, role: 'Hermes profile', profile: profile.name, gateway: profile.gateway, aliases: [profile.name.toLowerCase()] }))
   if (runtime.openCode.availability === 'available' && !agents.some((agent) => agent.id === 'opencode')) agents.push({ id: 'opencode', role: 'OpenCode', kind: 'opencode', aliases: ['opencode', 'open-code'] })
@@ -830,6 +833,12 @@ export function agentRoster(runtime: RuntimeSnapshot, subagents?: SubagentSnapsh
   for (const run of subagents?.runs.availability === 'available' ? subagents.runs.data : []) {
     if (!run.live || agents.some((agent) => agent.id === run.id)) continue
     agents.push({ id: run.id, role: 'Subagent (delegation child)', kind: 'subagent', profile: run.profile, aliases: [run.id.toLowerCase()], subagent: run })
+  }
+  // Cursor sessions are discovered the same way, from Cursor's own records on this machine: a project
+  // is at a desk while its edits or conversation stores are fresh, and leaves when they go quiet.
+  for (const session of cursor?.sessions.availability === 'available' ? cursor.sessions.data : []) {
+    if (!session.live || agents.some((agent) => agent.id === session.id)) continue
+    agents.push({ id: session.id, role: 'Cursor agent (project session)', kind: 'cursor', aliases: [session.id.toLowerCase(), session.project.toLowerCase()], cursor: session })
   }
   return agents
 }
@@ -882,13 +891,14 @@ function roomForState(state: OfficeState, index: number): Pick<OfficeStation, 'r
 
 /**
  * `declared` counts the agents this machine reports (Hermes profiles and OpenCode). A delegation
- * child is declared nowhere, so it is counted separately in `subagents` while it works — but it
- * still counts as active work, because that is what it is.
+ * child and a Cursor session are declared nowhere, so each is counted separately while it works —
+ * but both still count as active work, because that is what they are.
  */
 export function buildOfficeSummary(stations: OfficeStation[], runtime: RuntimeSnapshot): OfficeSummary {
   const gateways = runtime.profiles.availability === 'available' ? runtime.profiles.data.map((profile) => profile.gateway) : []
-  const declared = stations.filter((station) => station.kind !== 'subagent')
+  const declared = stations.filter((station) => station.kind !== 'subagent' && station.kind !== 'cursor')
   const subagents = stations.filter((station) => station.kind === 'subagent').length
+  const cursor = stations.filter((station) => station.kind === 'cursor').length
   return {
     declared: declared.length,
     active: stations.filter((station) => ['Working', 'Reviewing', 'Collaborating'].includes(station.state)).length,
@@ -896,6 +906,7 @@ export function buildOfficeSummary(stations: OfficeStation[], runtime: RuntimeSn
     offline: declared.filter((station) => station.state === 'Offline').length,
     unknown: declared.filter((station) => station.state === 'Unknown').length,
     ...(subagents > 0 ? { subagents } : {}),
+    ...(cursor > 0 ? { cursor } : {}),
     gatewaysReachable: gateways.filter((gateway) => gateway === 'Running').length,
     gatewaysDeclared: gateways.length,
   }
@@ -941,6 +952,34 @@ function subagentStation(run: SubagentRun, index: number, snapshot: SubagentSnap
   }
 }
 
+/**
+ * A Cursor session at a desk. Cursor's local records say which project it is editing and with which
+ * model, but not which of that project's named agents it is running (that stays on Cursor's servers),
+ * so the station is the project and the dialog says so rather than inventing a name.
+ */
+function cursorStation(session: CursorSession, index: number, snapshot: CursorSnapshot | undefined, now: number): OfficeStation {
+  const last = Date.parse(session.lastActivityAt)
+  const since = Number.isFinite(last) ? `${Math.max(0, Math.round((now - last) / 1000))}s ago` : 'unknown'
+  const evidence = session.evidence.map((item) => item === 'edits' ? 'AI file edits' : item === 'store' ? 'conversation store write' : 'workbench state write').join(' + ')
+  const files = session.filesTouched === 0 ? 'no file edits yet' : `${session.filesTouched} file${session.filesTouched === 1 ? '' : 's'} edited`
+  return {
+    id: session.id,
+    kind: 'cursor',
+    cursor: session,
+    name: `Cursor · ${session.project}`,
+    role: 'Cursor agent (project session)',
+    room: 'Workspace',
+    roomPosition: 'assigned-desk',
+    seat: index + 1,
+    state: 'Working',
+    currentTask: `Cursor is working in ${session.project}`,
+    recentActivity: `Last local evidence ${since} (${files})`,
+    activity: `Cursor: ${files}`,
+    provenance: `Cursor's own records on this machine: ${evidence}; project ${session.directory}; model ${session.model ?? 'not recorded'}; ${session.conversations} conversation(s) seen in the last 24h; ${session.agents} Cursor agent definition(s) in this project. Cursor does not record which named agent a session runs locally, so the station is the project, not an agent name; conversation titles, prompts and file contents are never read.`,
+    freshness: `Cursor snapshot ${snapshot?.fetchedAt ?? 'unknown'}`,
+  }
+}
+
 export function buildOfficeSnapshot(runtime: RuntimeSnapshot, board: TaskBoardSnapshot, activity: ActivitySnapshot, options: OfficeBuildOptions = {}): OfficeSnapshot {
   const fetchedAt = new Date().toISOString()
   const now = typeof options.now === 'number' ? options.now : options.now ? Date.parse(options.now) : Date.now()
@@ -949,8 +988,9 @@ export function buildOfficeSnapshot(runtime: RuntimeSnapshot, board: TaskBoardSn
   const freshActivity = activity.sessions.availability === 'available' && isFresh(activity.fetchedAt, now)
   const agentActivity = options.agentActivity && isFresh(options.agentActivity.fetchedAt, now) ? options.agentActivity : undefined
   const explicitStates = options.explicitStates ?? []
-  const stations = agentRoster(runtime, options.subagents).map((agent, index): OfficeStation => {
+  const stations = agentRoster(runtime, options.subagents, options.cursor).map((agent, index): OfficeStation => {
     if (agent.kind === 'subagent' && agent.subagent) return subagentStation(agent.subagent, index, options.subagents, now)
+    if (agent.kind === 'cursor' && agent.cursor) return cursorStation(agent.cursor, index, options.cursor, now)
     const gateway = agent.gateway
     const task = freshBoard ? attributedTask(board.tasks.data, agent.aliases) : undefined
     const overlay = explicitState(agent, explicitStates, now)
@@ -1073,12 +1113,12 @@ export async function getTaskDetail(id: string, now = Date.now(), board?: string
 }
 
 export async function getOffice(now = Date.now()): Promise<OfficeSnapshot> {
-  const [runtime, board, activity, agentActivity, subagents] = await Promise.all([getSnapshot(now), getTaskBoard(now), getActivity(now), agentActivitySource(now), getSubagents(now)])
-  return buildOfficeSnapshot(runtime, board, activity, { agentActivity, subagents })
+  const [runtime, board, activity, agentActivity, subagents, cursor] = await Promise.all([getSnapshot(now), getTaskBoard(now), getActivity(now), agentActivitySource(now), getSubagents(now), getCursor(now)])
+  return buildOfficeSnapshot(runtime, board, activity, { agentActivity, subagents, cursor })
 }
 
 export async function getDashboard(now = Date.now()): Promise<DashboardSnapshot> {
-  const [runtime, board, calendar, activity, knowledge, channels, agentActivity, subagents] = await Promise.all([getSnapshot(now), getTaskBoard(now), getCalendar(now), getActivity(now), getKnowledge(now), getChannels(now), agentActivitySource(now), getSubagents(now)])
-  const office = buildOfficeSnapshot(runtime, board, activity, { agentActivity, subagents })
+  const [runtime, board, calendar, activity, knowledge, channels, agentActivity, subagents, cursor] = await Promise.all([getSnapshot(now), getTaskBoard(now), getCalendar(now), getActivity(now), getKnowledge(now), getChannels(now), agentActivitySource(now), getSubagents(now), getCursor(now)])
+  const office = buildOfficeSnapshot(runtime, board, activity, { agentActivity, subagents, cursor })
   return buildDashboard({ runtime, board, calendar, activity, knowledge, channels, office, commands: commandHealth() })
 }

@@ -58,7 +58,7 @@ Checks: `npm run lint`, `npm test`, `npm run build`.
 
 ## Pages
 
-- **Agents**: every agent on this machine, with model, gateway state and what it is doing in the office. Agents are discovered, not configured: every Hermes profile from `hermes profile list` is an agent, plus OpenCode when it is installed, plus every child of a running delegation — a subagent is an agent while its batch works and leaves when it finishes. New profiles and new delegations appear automatically, and each agent gets its own character colours derived from its name. The bottom of the page lists the subagents working right now and the ones that finished most recently.
+- **Agents**: every agent on this machine, with model, gateway state and what it is doing in the office. Agents are discovered, not configured: every Hermes profile from `hermes profile list` is an agent, plus OpenCode when it is installed, plus every child of a running delegation — a subagent is an agent while its batch works and leaves when it finishes — plus every Cursor agent defined in a project (or in `~/.cursor/agents`) and every project Cursor's own local records show it working in. New profiles, new delegations and new Cursor definitions appear automatically, and each agent gets its own character colours derived from its name. The bottom of the page lists the subagents working right now, the ones that finished most recently, and Cursor's sessions and definitions.
 - **Office** (home page): the office fills the screen below the header. A HUD across the top shows crew active, gateways running, running/open tasks, the next cron run and (when any) failed CLI reads; chips link to their page. The **Panel** button opens one side panel with three tabs: **Crew** (crew snapshot and a clickable list of stations), **Stats** (statistics across every source, token usage, the Kanban status breakdown, runtime and what is up next; tiles link to their pages) and **Activity** (unattributed session metadata and messaging channels). The **Tasks**, **Calendar** and **Tokens** buttons open the Task Board, a month calendar of cron runs or token usage over the office, without leaving it (Esc or ✕ closes them; *Open full page* goes to the page). `#/dashboard` opens the Office.
 
   The view switches between **3D** (the default) and **2D**, remembered per browser; browsers without WebGL stay on 2D. The 3D view (three.js via React Three Fiber, loaded only when used) is an office of several rooms with an Indonesian touch:
@@ -157,7 +157,7 @@ The server uses only these fixed, read-only commands:
 - for token usage, for every profile (at most four at a time): `hermes -p <profile> insights --days <1|7|30>`
 - for live Office activity, for every profile (at most four at a time): `hermes -p <profile> logs agent -n 80 --since 3m` and `hermes -p <profile> sessions list --limit 3`
 
-The one other source is read directly, without running anything: the delegation live transcripts Hermes writes per child under `<hermes root>/cache/delegation/live/<delegation_id>/` (and the same path inside each `profiles/<name>/`). Ruang reads `manifest.json` and the last-modified time of each `task-N.log` — never the transcript contents — to know that a subagent is working right now.
+Two other sources are read directly, without running anything. The first is the delegation live transcripts Hermes writes per child under `<hermes root>/cache/delegation/live/<delegation_id>/` (and the same path inside each `profiles/<name>/`). Ruang reads `manifest.json` and the last-modified time of each `task-N.log` — never the transcript contents — to know that a subagent is working right now. The second is Cursor's own state (see *Cursor agents in the Office*): the agent definitions the user wrote, and Cursor's code-tracking database (`~/.cursor/ai-tracking/ai-code-tracking.db`, via node's built-in SQLite or the `sqlite3` CLI, read-only) plus its per-conversation stores under Cursor's Application Support folder.
 
 How they run:
 - Commands run with `NO_COLOR=1` and a wide `COLUMNS` so the plain-text formats parse reliably.
@@ -172,7 +172,7 @@ Only normalized data is exposed:
 - recognized enabled-skill table fields
 - configured messaging-platform names with a generic configured/connected state, and an integer active-session count when it is safely recognized
 
-Log lines are the one intentional exception to "no raw output". They are returned after two redaction passes: Hermes's own secret redaction, then a second pass by the server (API keys, bearer tokens, `key=value` secrets, bot tokens). Home-directory paths are shortened to `~`, and the `hermes logs` header line (which contains a path) is dropped. Cron last-run error text is never returned, only ok/failed. A subagent's goal label goes through the same second redaction pass before it is shown.
+Log lines are the one intentional exception to "no raw output". They are returned after two redaction passes: Hermes's own secret redaction, then a second pass by the server (API keys, bearer tokens, `key=value` secrets, bot tokens). Home-directory paths are shortened to `~`, and the `hermes logs` header line (which contains a path) is dropped. Cron last-run error text is never returned, only ok/failed. A subagent's goal label goes through the same second redaction pass before it is shown, and so does a Cursor agent's own description line.
 
 Otherwise, raw CLI output, process details, paths, configuration, credentials, authentication, API keys, environment files, provider details and session databases are never read or returned. A failed source is rendered as `Not Available`; an unknown individual field is rendered as `Unknown`. The delegation manifests are read the same way the Folders page reads a profile folder: read-only, bounded, and normalized to ids, counts, a redacted goal label, a model and timestamps — no session database and no transcript text ever reaches the browser.
 
@@ -186,7 +186,7 @@ Empty source results remain available and show truthful empty states; unparseabl
 
 ## Office
 
-`/api/office` is a read-only composition of the existing cached runtime, Kanban and activity reads. It has one station per agent (every Hermes profile, plus OpenCode when installed, plus every subagent working right now), in the order `hermes profile list` gives them, with subagents after them. Desks are hot desks: there is one per agent and none carries a name. Character colours are derived from the agent name, so they are the same on every device. The 2D view lays out Workspace (desks and the meeting room) and Lounge for any number of agents with CSS only; no image or art assets are used.
+`/api/office` is a read-only composition of the existing cached runtime, Kanban and activity reads. It has one station per agent (every Hermes profile, plus OpenCode when installed, plus every subagent working right now, plus every Cursor session working right now), in the order `hermes profile list` gives them, with subagents and Cursor sessions after them. Desks are hot desks: there is one per agent and none carries a name. Character colours are derived from the agent name, so they are the same on every device. The 2D view lays out Workspace (desks and the meeting room) and Lounge for any number of agents with CSS only; no image or art assets are used.
 
 Office state is one of `Idle`, `Working`, `Reviewing`, `Collaborating` or `Unknown` (`Offline` is reserved and not produced). The precedence is:
 1. A fresh, unexpired internal explicit-state overlay can declare `Working`, `Reviewing` or `Collaborating`.
@@ -212,7 +212,7 @@ State placement is visualized without inventing work:
 - `Idle` is in Lounge (in 3D, wandering the office).
 - `Unknown` is shown at a desk with a labelled neutral presence.
 
-The crew snapshot counts agents, active work (`Working`/`Reviewing`/`Collaborating`), managed idle and unknown separately. Subagents are a separate number too: they are never counted as declared agents, but they are counted as active work, because that is what they are. Gateway health (how many profiles report their gateway `Running`) is displayed as a separate metric. When a station has several Kanban tasks, the `running` one wins, then `review`, then the first open task.
+The crew snapshot counts agents, active work (`Working`/`Reviewing`/`Collaborating`), managed idle and unknown separately. Subagents and Cursor sessions are separate numbers too: neither is ever counted as a declared agent, but both are counted as active work, because that is what they are. Gateway health (how many profiles report their gateway `Running`) is displayed as a separate metric. When a station has several Kanban tasks, the `running` one wins, then `review`, then the first open task.
 
 `/api/channels` is a separate safe snapshot sourced only from the Messaging Platforms section and active-session count of `hermes status --all`; it never exposes unconfigured platforms or any other status content. The Office introduces no write endpoint, shell input or command beyond the fixed allowlist.
 
@@ -238,6 +238,22 @@ A delegation child is an agent too, and for as long as it works it is part of th
 - Reads are bounded (the 20 most recent batches, newest first, at most 40 children, 10-second cache) so a machine with months of delegations stays cheap.
 
 `/api/subagents` returns the same snapshot the office uses: every recent child with `live`, `status`, `profile`, `model`, `startedAt` and `lastOutputAt`.
+
+## Cursor agents in the Office
+
+Cursor is the second way to run an agent on this machine, and it keeps two things locally that Ruang can read without asking Cursor anything:
+
+- **definitions** — the agent files the user wrote, `.cursor/agents/*.md` inside a project (one or two levels under the configured roots) and `~/.cursor/agents` for the global ones. Each file's frontmatter `name` and `description` become a card on the Agents page;
+- **sessions** — Cursor's code-tracking database (`~/.cursor/ai-tracking/ai-code-tracking.db`) records the file, model, conversation and time of every edit its AI made, and Cursor's per-conversation stores under its Application Support folder are written while a conversation is live.
+
+- A project gets a station, a hot desk and its own character colours while that evidence is fresh: `live` means an AI edit or a conversation store write inside the last 10 minutes. The station is named `Cursor · <project>`, `Working`, with the files it edited in the speech bubble.
+- A **workbench state write alone is never work.** macOS rewrites `workspaceStorage/*/state.vscdb` for many projects at the same moment (for example when Cursor quits), so trusting it would put five Cursor agents at desks at the same second. It is used as context in the dialog and as the "last seen" time of a session, never as proof that an agent is working.
+- Cursor keeps the name of the agent a session ran *on its servers*, and does not record it locally. Rather than guess, the station is the project and its dialog says how many agents that project defines. Conversation titles, prompts and file contents are never read: only names, counts, models and timestamps.
+- Definitions carry their own redacted description, the project they belong to and the path of the markdown file, so the Agents page doubles as an inventory of what has been written for Cursor.
+- Reads are bounded (the 120 most recent agent folders, 800 recent edits over 24 hours, 60 stores, 250 workspaces, 15-second cache) so a machine with years of Cursor history stays cheap. Cursor data belongs to no Hermes profile, so no profile lock covers it; the **`privacy.all`** switch withholds its paths, models and descriptions.
+- Location overrides: `RUANG_CURSOR_HOME` (default `~/.cursor`), `RUANG_CURSOR_ROOTS` (colon-separated project roots, default `~/projects`) and `RUANG_CURSOR_APP_SUPPORT` (default `~/Library/Application Support/Cursor`).
+
+`/api/cursor` returns the definitions and the recent sessions with `live`, `project`, `model`, `conversations`, `filesTouched`, `lastActivityAt` and the `evidence` each session rests on.
 
 ## Folders
 
